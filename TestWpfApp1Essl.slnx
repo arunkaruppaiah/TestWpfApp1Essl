@@ -1,3 +1,6 @@
 <Solution>
+  <Configurations>
+    <Platform Name="x86" />
+  </Configurations>
   <Project Path="TestWpfApp1Essl/TestWpfApp1Essl.csproj" />
 </Solution>

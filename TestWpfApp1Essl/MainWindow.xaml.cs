@@ -66,12 +66,6 @@ namespace TestWpfApp1Essl
             if (!(File.Exists(currentDir + fileName)))
             {
                 //Copy the required file
-                if (File.Exists(sourceDir + @"\" + dllFileName))
-                    sourceDir += "";
-                else if (IntPtr.Size == 8)
-                    sourceDir += @"\64bit";
-                else
-                    sourceDir += @"\32bit";
                 if (File.Exists(sourceDir + fileName))
                     File.Copy(sourceDir + fileName, currentDir + fileName);
                 return true;
