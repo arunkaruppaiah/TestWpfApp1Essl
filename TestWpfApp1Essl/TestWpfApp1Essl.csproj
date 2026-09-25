@@ -3,34 +3,30 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows7.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
-    <!-- 32-bit only: Ref holds the x86 ZKTeco Standalone SDK 6.3.1.55, matching Passoft -->
+    <!-- Match Passoft (net48, x86, C# 7.3) so Manager\*.cs can be copied across unchanged -->
     <PlatformTarget>x86</PlatformTarget>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
   </PropertyGroup>
 
-	<ItemGroup>
-		<COMReference Include="zkemkeeper">
-			<VersionMinor>0</VersionMinor>
-			<VersionMajor>1</VersionMajor>
-			<Guid>fe9ded34-e159-408e-8490-b720a5e632c7</Guid>
-			<Lcid>0</Lcid>
-			<WrapperTool>tlbimp</WrapperTool>
-			<Isolated>false</Isolated>
-			<EmbedInteropTypes>true</EmbedInteropTypes>
-		</COMReference>
-	</ItemGroup>
-
+  <!-- Same layout as Passoft\Ref: interop assemblies in Ref, ZKTeco Standalone SDK 6.3.1.55 (x86) in Ref\eTimeTrack -->
   <ItemGroup>
     <Reference Include="AxInterop.zkemkeeper">
-      <HintPath>Ref\AxInterop.zkemkeeper.DLL</HintPath>
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>Ref\AxInterop.zkemkeeper.dll</HintPath>
+    </Reference>
+    <Reference Include="Interop.zkemkeeper">
+      <SpecificVersion>False</SpecificVersion>
+      <EmbedInteropTypes>False</EmbedInteropTypes>
+      <HintPath>Ref\Interop.zkemkeeper.dll</HintPath>
     </Reference>
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="Ref\*.dll">
+    <None Update="Ref\tcpcomm.dll;Ref\eTimeTrack\*.dll">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
