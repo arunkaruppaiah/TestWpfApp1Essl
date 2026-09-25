@@ -89,7 +89,7 @@ namespace TestWpfApp1Essl
             // Required to initialize ActiveX control handle
             axCZKEM1.CreateControl();
 
-            string ip = "192.168.1.201";
+            string ip = "192.168.29.201";
 
             // Use the extended string method identified from eTimeTrackLite
             axCZKEM1.SetCommPasswordEx("000000");
