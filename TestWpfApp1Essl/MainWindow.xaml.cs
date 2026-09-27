@@ -1,4 +1,4 @@
-using Passoft.Manager;
+﻿using Passoft.Manager;
 using Pasumai.Common;
 using Pasumai.Common.Model;
 using System;
@@ -33,9 +33,12 @@ namespace TestWpfApp1Essl
 
         private int FingerIndex => int.TryParse(txtFinger.Text, out int i) ? i : 0;
 
+        // Set while an enrollment is waiting on the device; Cancel enrollment cancels it.
+        private CancellationTokenSource _enrollCts;
+
         private async Task Run(string name, Func<AttendanceSyncManager, Task<string>> op)
         {
-            IsEnabled = false;
+            panelInputs.IsEnabled = panelActions.IsEnabled = false;
             var manager = NewManager();
             try
             {
@@ -43,14 +46,62 @@ namespace TestWpfApp1Essl
                 string result = await op(manager);
                 Logger.Log(name + ": " + result + (string.IsNullOrEmpty(manager.ErrorMessage) ? "" : " - " + manager.ErrorMessage));
             }
+            catch (OperationCanceledException)
+            {
+                Logger.Log(name + ": cancelled");
+            }
             catch (Exception ex)
             {
                 Logger.Log(name + " failed", ex);
             }
             finally
             {
-                IsEnabled = true;
+                panelInputs.IsEnabled = panelActions.IsEnabled = true;
             }
+        }
+
+        // Runs an enrollment with the Cancel button live for its duration.
+        private Task RunEnrollment(string name, Func<AttendanceSyncManager, CancellationToken, Task<bool>> op)
+        {
+            return RunCancellable(name, async (m, ct) => (await op(m, ct)).ToString());
+        }
+
+        private async Task RunCancellable(string name, Func<AttendanceSyncManager, CancellationToken, Task<string>> op)
+        {
+            using (var cts = new CancellationTokenSource())
+            {
+                _enrollCts = cts;
+                btnCancel.IsEnabled = true;
+                try
+                {
+                    await Run(name, m => op(m, cts.Token));
+                }
+                finally
+                {
+                    btnCancel.IsEnabled = false;
+                    _enrollCts = null;
+                }
+            }
+        }
+
+        private void Cancel_Click(object sender, RoutedEventArgs e)
+        {
+            if (_enrollCts == null) return;
+            Logger.Log("Cancelling...");
+            btnCancel.IsEnabled = btnDone.IsEnabled = false;
+            _enrollCts.Cancel();
+        }
+
+        // Set during face enrollment: the device raises no event when a face is captured, so the
+        // user clicks Done once the device shows success.
+        private CancellationTokenSource _finishCts;
+
+        private void Done_Click(object sender, RoutedEventArgs e)
+        {
+            if (_finishCts == null) return;
+            Logger.Log("Done clicked - checking the device for the face...");
+            btnCancel.IsEnabled = btnDone.IsEnabled = false;
+            _finishCts.Cancel();
         }
 
         private async void DeviceInfo_Click(object sender, RoutedEventArgs e)
@@ -84,15 +135,45 @@ namespace TestWpfApp1Essl
         {
             string userId = UserId;
             int finger = FingerIndex;
+
+            bool exists = false;
+            await Run("Check finger " + finger, async m => (exists = await m.HasFingerprint(userId, finger)) ? "already enrolled" : "empty");
+            if (exists && MessageBox.Show(this,
+                    "User " + userId + " already has finger " + finger + " enrolled.\n\nDelete it and register a new one?",
+                    "Replace fingerprint", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+            {
+                Logger.Log("Enroll finger: skipped, existing fingerprint kept");
+                return;
+            }
+
             Logger.Log("Place finger on the device (90s timeout)");
-            await Run("Enroll finger", async m => (await m.PromptUserFingerprintEnrollment(userId, finger, CancellationToken.None)).ToString());
+            await RunEnrollment("Enroll finger", (m, ct) => m.PromptUserFingerprintEnrollment(userId, finger, exists, ct));
         }
 
         private async void EnrollFace_Click(object sender, RoutedEventArgs e)
         {
             string userId = UserId;
-            Logger.Log("Look at the device (90s timeout)");
-            await Run("Enroll face", async m => (await m.PromptUserFaceEnrollment(userId, CancellationToken.None)).ToString());
+            Logger.Log("Look at the device, then click Done when it shows success (90s timeout)");
+            using (var finish = new CancellationTokenSource())
+            {
+                _finishCts = finish;
+                btnDone.IsEnabled = true;
+                try
+                {
+                    await RunEnrollment("Enroll face", (m, ct) => m.PromptUserFaceEnrollment(userId, ct, finish.Token));
+                }
+                finally
+                {
+                    btnDone.IsEnabled = false;
+                    _finishCts = null;
+                }
+            }
+        }
+
+        private async void ListenEvents_Click(object sender, RoutedEventArgs e)
+        {
+            Logger.Log("Punch / verify on the device now (60s, Cancel to stop)");
+            await RunCancellable("Listen events", (m, ct) => m.ListenForDeviceEvents(TimeSpan.FromSeconds(60), ct));
         }
 
         private async void DeleteFinger_Click(object sender, RoutedEventArgs e)
