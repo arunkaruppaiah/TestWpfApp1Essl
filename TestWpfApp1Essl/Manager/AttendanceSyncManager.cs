@@ -371,85 +371,51 @@ namespace Passoft.Manager
             Logger.Log("RegEvent failed (error " + errorCode + ") - device events will not arrive.");
         }
 
-        // Diagnostic: connects, subscribes to every real-time event the SDK exposes and logs each one
-        // with its arguments until the timeout or cancellation. Punch on the device while it runs to
-        // tell "events never reach the app" apart from "the device sends no event for this action".
-        public Task<string> ListenForDeviceEvents(TimeSpan duration, CancellationToken cancellationToken)
-        {
-            var host = Host;
-            if (host == null)
-                return Task.FromResult("Attendance device is not available.");
-
-            return host.InvokeAsync(async (d, ct) =>
-            {
-                if (!Connect(d)) return "Connect failed";
-                var subscriptions = new List<Tuple<System.Reflection.EventInfo, Delegate>>();
-                int count = 0;
-                try
-                {
-                    _regEvents(d);
-                    foreach (var ev in typeof(AxCZKEM).GetEvents(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly))
-                    {
-                        var invoke = ev.EventHandlerType.GetMethod("Invoke");
-                        var ps = invoke.GetParameters();
-                        if (ps.Length != 2) continue;
-                        var sender = System.Linq.Expressions.Expression.Parameter(ps[0].ParameterType, "sender");
-                        var args = System.Linq.Expressions.Expression.Parameter(ps[1].ParameterType, "e");
-                        string name = ev.Name;
-                        Action<object> log = e => { count++; Logger.Log("Device event " + name + ": " + _describeEventArgs(e)); };
-                        var body = System.Linq.Expressions.Expression.Invoke(System.Linq.Expressions.Expression.Constant(log),
-                            System.Linq.Expressions.Expression.Convert(args, typeof(object)));
-                        var handler = System.Linq.Expressions.Expression.Lambda(ev.EventHandlerType, body, sender, args).Compile();
-                        ev.AddEventHandler(d, handler);
-                        subscriptions.Add(Tuple.Create(ev, handler));
-                    }
-                    Logger.Log("Listening to " + subscriptions.Count + " device events for " + (int)duration.TotalSeconds + "s...");
-                    try { await Task.Delay(duration, ct).ConfigureAwait(true); }
-                    catch (OperationCanceledException) { }
-                    return count + " events received";
-                }
-                finally
-                {
-                    foreach (var sub in subscriptions)
-                        try { sub.Item1.RemoveEventHandler(d, sub.Item2); } catch { }
-                    try { d.Disconnect(); } catch { }
-                }
-            }, cancellationToken);
-        }
-
-        private static string _describeEventArgs(object e)
-        {
-            if (e == null) return "";
-            return string.Join(", ", e.GetType().GetFields().Select(f => f.Name + "=" + f.GetValue(e)));
-        }
+        // How long an enrollment waits for the user at the device before giving up.
+        public const int EnrollTimeoutSeconds = 90;
 
         // Waits for the device's enroll-finished event and returns its actionResult (0 = success),
-        // -1 after 90s, or -2 when finishToken fires. Devices with numeric user IDs raise
-        // OnEnrollFinger; SSR/TFT devices with string user IDs (e.g. eSSL x2008) raise
-        // OnEnrollFingerEx instead, so listen for both. The x2008 raises nothing for a face, so face
-        // enrollment ends on finishToken (the user saw success on the device). No SDK calls are
-        // made while waiting - reading from the device mid-enrollment freezes the terminal.
-        private async Task<int> _waitForEnrollResult(AxCZKEM d, CancellationToken ct, CancellationToken finishToken = default(CancellationToken))
+        // or -1 on timeout. Devices with numeric user IDs raise OnEnrollFinger; SSR/TFT devices with
+        // string user IDs (e.g. eSSL x2008) raise OnEnrollFingerEx instead, so listen for both.
+        // The x2008 raises nothing for a face, so face enrollment passes completedCheck: it runs
+        // every 3s after a 5s head start and completes the wait with 0 once it returns true. Keep it
+        // to small calls - reading a template mid-enrollment freezes the terminal.
+        private async Task<int> _waitForEnrollResult(AxCZKEM d, CancellationToken ct, Func<bool> completedCheck = null)
         {
             var enrollTcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-            Axzkemkeeper._IZKEMEvents_OnEnrollFingerEventHandler handler = (sender, e) =>
+
+            async void PollCompletion()
             {
-                Logger.Log("Device event OnEnrollFinger: result " + e.actionResult);
-                enrollTcs.TrySetResult(e.actionResult);
-            };
-            Axzkemkeeper._IZKEMEvents_OnEnrollFingerExEventHandler handlerEx = (sender, e) =>
-            {
-                Logger.Log("Device event OnEnrollFingerEx: result " + e.actionResult);
-                enrollTcs.TrySetResult(e.actionResult);
-            };
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5)).ConfigureAwait(true);   // resumes on host thread
+                    while (!enrollTcs.Task.IsCompleted)
+                    {
+                        if (completedCheck())
+                        {
+                            enrollTcs.TrySetResult(0);
+                            return;
+                        }
+                        await Task.Delay(TimeSpan.FromSeconds(3)).ConfigureAwait(true);
+                    }
+                }
+                catch { }
+            }
+
+            Axzkemkeeper._IZKEMEvents_OnEnrollFingerEventHandler handler =
+                (sender, e) => enrollTcs.TrySetResult(e.actionResult);
+            Axzkemkeeper._IZKEMEvents_OnEnrollFingerExEventHandler handlerEx =
+                (sender, e) => enrollTcs.TrySetResult(e.actionResult);
 
             d.OnEnrollFinger += handler;
             d.OnEnrollFingerEx += handlerEx;
             try
             {
+                if (completedCheck != null)
+                    PollCompletion();
+
                 using (ct.Register(() => enrollTcs.TrySetCanceled()))
-                using (finishToken.Register(() => enrollTcs.TrySetResult(-2)))   // -2 = user said done
-                using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90)))
+                using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(EnrollTimeoutSeconds)))
                 using (timeout.Token.Register(() => enrollTcs.TrySetResult(-1)))   // -1 = timed out
                 {
                     try
@@ -474,10 +440,10 @@ namespace Passoft.Manager
         }
 
         // NEW: face enrollment on face terminals. Deletes any existing face (the device refuses to
-        // re-enroll over it), starts enrollment on the device, then waits for the enroll event or
-        // the timeout. The result is decided by whether a face template exists afterwards.
-        // finishToken: fired by the user once the device shows success (no enroll event for faces).
-        public Task<bool> PromptUserFaceEnrollment(string userId, CancellationToken cancellationToken, CancellationToken finishToken = default(CancellationToken))
+        // re-enroll over it), starts enrollment on the device, then waits for the face count to rise
+        // or the timeout. The result is decided by whether a face template exists afterwards.
+        // With replaceExisting false, an existing face makes it fail instead of being deleted.
+        public Task<bool> PromptUserFaceEnrollment(string userId, bool replaceExisting, CancellationToken cancellationToken)
         {
             var host = Host;
             if (host == null)
@@ -490,6 +456,11 @@ namespace Passoft.Manager
                 {
                     if (_hasFace(d, userId))
                     {
+                        if (!replaceExisting)
+                        {
+                            ErrorMessage = "A face is already enrolled.";
+                            return false;
+                        }
                         if (!d.DelUserFace(1, userId, FaceIndex))
                         {
                             int errorCode = 0;
@@ -504,6 +475,11 @@ namespace Passoft.Manager
                     d.CancelOperation();
                     d.EnableDevice(1, true);
 
+                    // The device raises no event when a face is saved, so watch its face count
+                    // (RefreshData + GetDeviceStatus 21) instead. Reading the face template itself
+                    // mid-enrollment freezes the terminal; these small calls do not.
+                    int facesBefore = _faceCount(d);
+
                     // StartEnrollEx: (userId, 111 = face slot, flag 0)
                     if (!d.StartEnrollEx(userId, FaceIndex, 0))
                     {
@@ -513,17 +489,16 @@ namespace Passoft.Manager
                         return false;
                     }
 
-                    int result = await _waitForEnrollResult(d, ct, finishToken).ConfigureAwait(true);
+                    int result = await _waitForEnrollResult(d, ct, () =>
+                    {
+                        // The count stays stale mid-enrollment unless the device refreshes first.
+                        d.RefreshData(1);
+                        return facesBefore >= 0 && _faceCount(d) > facesBefore;
+                    }).ConfigureAwait(true);
 
                     bool landed = _hasFace(d, userId);
                     if (!landed)
-                    {
-                        if (result == -2)
-                            try { d.CancelOperation(); } catch { }   // Done clicked before the device finished
-                        ErrorMessage = result == -1 ? "Face enrollment timed out."
-                            : result == -2 ? "No face on the device yet - enrollment cancelled."
-                            : "Face enrollment failed (code " + result + ").";
-                    }
+                        ErrorMessage = result == -1 ? "Face enrollment timed out." : "Face enrollment failed (code " + result + ").";
                     return landed;
                 }
                 finally
@@ -531,6 +506,36 @@ namespace Passoft.Manager
                     try { d.Disconnect(); } catch { }
                 }
             }, cancellationToken);
+        }
+
+        // Whether the device already holds a face for this user (asked before enrolling so the UI
+        // can confirm replacing it).
+        public Task<bool> HasFace(string userId)
+        {
+            var host = Host;
+            if (host == null)
+                return Task.FromResult(false);
+
+            return host.InvokeAsync(d =>
+            {
+                if (!Connect(d)) return false;
+                try { return _hasFace(d, userId); }
+                finally { try { d.Disconnect(); } catch { } }
+            });
+        }
+
+        // Number of face templates on the device, or -1 if the device won't say.
+        private static int _faceCount(AxCZKEM d)
+        {
+            int faces = 0;
+            try
+            {
+                return d.GetDeviceStatus(1, 21, ref faces) ? faces : -1;
+            }
+            catch
+            {
+                return -1;
+            }
         }
 
         private bool _hasFace(AxCZKEM d, string userId)

@@ -22,19 +22,14 @@
             <TextBlock Text="Finger" VerticalAlignment="Center" Margin="12,0,4,0" />
             <TextBox x:Name="txtFinger" Text="0" Width="30" />
         </StackPanel>
-        <DockPanel Grid.Row="1" Margin="0,0,0,8">
-            <Button x:Name="btnCancel" DockPanel.Dock="Right" Content="Cancel" Click="Cancel_Click" IsEnabled="False" Width="90" Height="30" />
-            <Button x:Name="btnDone" DockPanel.Dock="Right" Content="Done" Click="Done_Click" IsEnabled="False" Width="90" Height="30" Margin="0,0,8,0" />
-        <WrapPanel x:Name="panelActions">
+        <WrapPanel Grid.Row="1" x:Name="panelActions" Margin="0,0,0,8">
             <Button Content="Device info" Click="DeviceInfo_Click" Width="110" Height="30" Margin="0,0,8,0" />
             <Button Content="Add user" Click="AddUser_Click" Width="110" Height="30" Margin="0,0,8,0" />
-            <Button Content="Enroll finger" Click="EnrollFinger_Click" Width="110" Height="30" Margin="0,0,8,0" />
-            <Button Content="Enroll face" Click="EnrollFace_Click" Width="110" Height="30" Margin="0,0,8,0" />
-            <Button Content="Listen events" Click="ListenEvents_Click" Width="110" Height="30" Margin="0,0,8,0" />
+            <Button x:Name="btnEnrollFinger" Content="Enroll finger" Click="EnrollFinger_Click" Width="110" Height="30" Margin="0,0,8,0" />
+            <Button x:Name="btnEnrollFace" Content="Enroll face" Click="EnrollFace_Click" Width="110" Height="30" Margin="0,0,8,0" />
             <Button Content="Delete finger" Click="DeleteFinger_Click" Width="110" Height="30" Margin="0,0,8,0" />
             <Button Content="Sync (clears device log)" Click="Sync_Click" Width="160" Height="30" />
         </WrapPanel>
-        </DockPanel>
         <TextBlock Grid.Row="2" x:Name="txtDeviceInfo" TextWrapping="Wrap" FontWeight="SemiBold" Margin="0,0,0,6" />
         <DataGrid Grid.Row="3" x:Name="gridUsers" AutoGenerateColumns="False" IsReadOnly="True"
                   HeadersVisibility="Column" CanUserAddRows="False" SelectionMode="Single"
